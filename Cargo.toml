@@ -1,0 +1,42 @@
+[workspace]
+members = [".", "examples/opentelemetry"]
+
+[package]
+name = "axum-otel"
+version = "0.1.0"
+authors = ["Luca Palmieri <rust@lpalmieri.com>"]
+edition = "2018"
+
+license = "MIT/Apache-2.0"
+
+repository = "https://github.com/iamnivekx/axum-otel"
+documentation = "https://docs.rs/axum-otel/"
+readme = "README.md"
+
+description = "Structured logging middleware for axum."
+
+keywords = ["http", "axum", "tracing", "logging"]
+categories = ["asynchronous", "web-programming"]
+
+[features]
+default = ["emit_event_on_error"]
+
+emit_event_on_error = []
+uuid_v7 = ["uuid/v7"]
+
+[dependencies]
+axum = { version = "0.8", default-features = false }
+pin-project = "1.0.0"
+tracing = "0.1.36"
+uuid = { version = "1.6", features = ["v4"] }
+tower-http = { version = "0.6.4", features = [
+    "trace",
+    "request-id",
+    "timeout",
+    "add-extension",
+    "set-header",
+] }
+
+[dev-dependencies]
+axum = { version = "0.8", default-features = false, features = ["macros"] }
+tracing-subscriber = { version = "0.3", features = ["registry", "env-filter"] }
