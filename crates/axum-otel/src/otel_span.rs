@@ -9,7 +9,7 @@ use tower_http::{
     classify::ServerErrorsFailureClass,
     trace::{MakeSpan, OnFailure, OnResponse},
 };
-use tracing::field::{debug, Empty};
+use tracing::field::{Empty, debug};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 /// An implementor of [`MakeSpan`] which creates `tracing` spans populated with information about
@@ -46,7 +46,7 @@ impl<B> MakeSpan<B> for AxumOtelSpanLayer {
             .or_else(|| {
                 request
                     .headers()
-                    .get("svix-req-id")
+                    .get("request-id")
                     .and_then(|v| v.to_str().map(ToOwned::to_owned).ok())
             })
             .unwrap_or_else(|| KsuidMs::new(None, None).to_string());

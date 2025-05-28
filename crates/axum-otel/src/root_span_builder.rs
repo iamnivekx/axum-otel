@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use axum::{Error, ResponseError};
 use tracing::Span;
 
-/// `RootSpanBuilder` allows you to customise the root span attached by
+/// `RootSpanBuilder` allows you to customizes the root span attached by
 /// [`TracingLogger`] to incoming requests.
 ///
 /// [`TracingLogger`]: crate::TracingLogger

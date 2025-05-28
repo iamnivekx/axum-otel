@@ -1,9 +1,9 @@
 use crate::{RequestId, RootSpan, RootSpanBuilder, RootSpanBuilder};
-use actix_web::body::{BodySize, MessageBody};
-use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
-use actix_web::http::StatusCode;
-use actix_web::web::Bytes;
-use actix_web::{Error, HttpMessage, ResponseError};
+use axum::body::{BodySize, MessageBody};
+use axum::dev::{Service, ServiceRequest, ServiceResponse, Transform};
+use axum::http::StatusCode;
+use axum::web::Bytes;
+use axum::{Error, HttpMessage, ResponseError};
 use std::future::{ready, Future, Ready};
 use std::pin::Pin;
 use std::task::{Context, Poll};

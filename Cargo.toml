@@ -1,14 +1,13 @@
 [workspace]
-members = [".", "examples/opentelemetry"]
+members = ["crates/axum-otel"]
+resolver = "2"
 
-[package]
-name = "axum-otel"
+[workspace.package]
+rust-version = "1.82"
 version = "0.1.0"
-authors = ["Luca Palmieri <rust@lpalmieri.com>"]
-edition = "2018"
-
+authors = ["nivek <h4998@gmail.com>"]
+edition = "2021"
 license = "MIT/Apache-2.0"
-
 repository = "https://github.com/iamnivekx/axum-otel"
 documentation = "https://docs.rs/axum-otel/"
 readme = "README.md"
@@ -18,25 +17,26 @@ description = "Structured logging middleware for axum."
 keywords = ["http", "axum", "tracing", "logging"]
 categories = ["asynchronous", "web-programming"]
 
-[features]
-default = ["emit_event_on_error"]
-
-emit_event_on_error = []
-uuid_v7 = ["uuid/v7"]
-
-[dependencies]
+[workspace.dependencies]
 axum = { version = "0.8", default-features = false }
 pin-project = "1.0.0"
 tracing = "0.1.36"
 uuid = { version = "1.6", features = ["v4"] }
+tower = "0.5.2"
 tower-http = { version = "0.6.4", features = [
     "trace",
     "request-id",
-    "timeout",
-    "add-extension",
     "set-header",
 ] }
 
-[dev-dependencies]
+opentelemetry = { version = "0.29.0", features = ["metrics"] }
+opentelemetry_sdk = { version = "0.29.0", features = ["rt-tokio"] }
+opentelemetry-http = "0.29.0"
+opentelemetry-otlp = { version = "0.29.0", features = [
+    "metrics",
+    "grpc-tonic",
+] }
+
+[workspace.dev-dependencies]
 axum = { version = "0.8", default-features = false, features = ["macros"] }
 tracing-subscriber = { version = "0.3", features = ["registry", "env-filter"] }

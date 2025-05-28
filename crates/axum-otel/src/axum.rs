@@ -14,10 +14,9 @@ use axum::{
 use futures_util::future::BoxFuture;
 use opentelemetry::KeyValue; // Added KeyValue for convenience
 use opentelemetry::{
-    global,
+    Context, global,
     propagation::Extractor,
     trace::{SpanKind, StatusCode as OtelStatusCode, TraceContextExt, Tracer},
-    Context,
 };
 use std::net::SocketAddr; // Added SocketAddr
 use std::{
@@ -363,11 +362,11 @@ pub fn init_otel_layer() -> OtelLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{routing::get, Router};
+    use axum::{Router, routing::get};
     use opentelemetry::trace::{Span, SpanId, TraceError, TracerProvider as _};
     use opentelemetry_sdk::{
         testing::logs::InMemoryExporter,
-        trace::{self as sdktrace, config, Sampler, TracerProvider as SdkTracerProvider},
+        trace::{self as sdktrace, Sampler, TracerProvider as SdkTracerProvider, config},
     };
     use std::sync::Mutex;
     use tokio::net::TcpListener;
