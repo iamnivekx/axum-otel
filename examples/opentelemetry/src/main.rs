@@ -1,14 +1,15 @@
-use actix_web::{web, App, HttpServer};
-use opentelemetry::trace::TracerProvider;
+use axum::{routing::get, Router};
+use opentelemetry::trace::TracerProvider; // Keep for provider type in init_telemetry
 use opentelemetry::{global, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{propagation::TraceContextPropagator, Resource};
 use opentelemetry_semantic_conventions::resource;
-use std::io;
+use std::io; // Keep for main return type, though might change to anyhow::Result or similar
 use std::sync::LazyLock;
-use tracing_actix_web::TracingLogger;
+use axum_otel::{OtelLayer, DefaultRootSpanBuilder}; // Updated middleware imports
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Registry};
+use tokio::net::TcpListener; // For Axum server
 
 const APP_NAME: &str = "axum-otel-demo";
 
@@ -28,7 +29,7 @@ fn init_telemetry() -> opentelemetry_sdk::trace::SdkTracerProvider {
     global::set_text_map_propagator(TraceContextPropagator::new());
     let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
-        .with_endpoint("http://localhost:4317")
+        .with_endpoint("http://localhost:4317") // Ensure OTel collector is running at this address
         .build()
         .expect("Failed to build the span exporter");
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
@@ -57,23 +58,28 @@ fn init_telemetry() -> opentelemetry_sdk::trace::SdkTracerProvider {
     provider
 }
 
-#[actix_web::main]
-async fn main() -> io::Result<()> {
+#[tokio::main]
+async fn main() -> io::Result<()> { // Consider changing to anyhow::Result for broader error handling
     let provider = init_telemetry();
 
-    HttpServer::new(move || {
-        App::new()
-            .wrap(TracingLogger::default())
-            .service(web::resource("/hello").to(hello))
-    })
-    .bind("127.0.0.1:8080")?
-    .run()
-    .await?;
+    // Setup Axum router and server
+    let app = Router::new()
+        .route("/hello", get(hello))
+        // Apply the OtelLayer.
+        // OtelLayer::new() takes PhantomData for R, so type annotation is needed if not inferable.
+        // DefaultRootSpanBuilder::default() or ::new() can be used.
+        .layer(OtelLayer::<DefaultRootSpanBuilder>::new());
 
-    // Ensure all spans have been shipped to Jaeger.
+
+    let listener = TcpListener::bind("127.0.0.1:8080").await?;
+    println!("Listening on http://127.0.0.1:8080/hello");
+    axum::serve(listener, app.into_make_service()).await?;
+
+    // Ensure all spans have been shipped.
+    // In a real application, this might be part of a more graceful shutdown sequence.
     provider
         .shutdown()
-        .expect("Failed to close tracer provider");
+        .expect("Failed to shutdown tracer provider."); // Use .expect for more context on panic
 
     Ok(())
 }

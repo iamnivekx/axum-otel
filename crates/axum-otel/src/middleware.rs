@@ -1,260 +1,190 @@
-use crate::{RequestId, RootSpan, RootSpanBuilder, RootSpanBuilder};
-use axum::body::{BodySize, MessageBody};
-use axum::dev::{Service, ServiceRequest, ServiceResponse, Transform};
-use axum::http::StatusCode;
-use axum::web::Bytes;
-use axum::{Error, HttpMessage, ResponseError};
-use std::future::{Future, Ready, ready};
+use crate::{RequestId, RootSpan, RootSpanBuilderTrait};
+// Removed: use axum::body::{BodySize, MessageBody};
+// Removed: use axum::dev::{Service as AxumService, ServiceRequest, ServiceResponse, Transform};
+use opentelemetry::KeyValue; // Added for _custom_attributes
+// Removed: use axum::http::StatusCode;
+// Removed: use axum::web::Bytes;
+use tower_layer::Layer;
+use axum::Error; // Keep for OtelMiddleware's Error type if it's derived from S::Error: Into<Error>
+// Removed: use axum::{HttpMessage, ResponseError};
+// Removed: use std::future::{Ready, ready};
+use std::future::Future; // Keep for ResponseFuture
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tracing::Span;
+use tower_service::Service; // New import
+use http::{Request, Response}; // New import
+// Removed: use futures_util::future::BoxFuture; // Not used
+use pin_project::pin_project; // For ResponseFuture
 
-/// `TracingLogger` is a middleware to capture structured diagnostic when processing an HTTP request.
-/// Check the crate-level documentation for an in-depth introduction.
+
+// New OtelLayer struct
+// R is now RootSpanBuilderTrait
+/// A Tower [`Layer`] for OpenTelemetry tracing.
 ///
-/// `TracingLogger` is designed as a drop-in replacement of [`actix-web`]'s [`Logger`].
+/// This layer creates a new root span for each incoming request and handles
+/// context propagation. It uses a [`RootSpanBuilderTrait`] implementation
+/// to customize how spans are created.
 ///
-/// # Usage
+/// # Example
 ///
-/// Register `TracingLogger` as a middleware for your application using `.wrap` on `App`.  
-/// In this example we add a [`tracing::Subscriber`] to output structured logs to the console.
+/// ```rust,no_run
+/// use axum::{Router, routing::get};
+/// use axum_otel::{OtelLayer, DefaultRootSpanBuilder};
 ///
-/// ```rust
-/// use actix_web::App;
-/// use tracing::{Subscriber, subscriber::set_global_default};
-/// use tracing_actix_web::TracingLogger;
-/// use tracing_log::LogTracer;
-/// use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
-/// use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Registry};
-///
-/// /// Compose multiple layers into a `tracing`'s subscriber.
-/// pub fn get_subscriber(
-///     name: String,
-///     env_filter: String
-/// ) -> impl Subscriber + Send + Sync {
-///     let env_filter = EnvFilter::try_from_default_env()
-///         .unwrap_or(EnvFilter::new(env_filter));
-///     let formatting_layer = BunyanFormattingLayer::new(
-///         name.into(),
-///         std::io::stdout
-///     );
-///     Registry::default()
-///         .with(env_filter)
-///         .with(JsonStorageLayer)
-///         .with(formatting_layer)
+/// async fn hello() -> &'static str {
+///     "Hello, world!"
 /// }
 ///
-/// /// Register a subscriber as global default to process span data.
-/// ///
-/// /// It should only be called once!
-/// pub fn init_subscriber(subscriber: impl Subscriber + Send + Sync) {
-///     LogTracer::init().expect("Failed to set logger");
-///     set_global_default(subscriber).expect("Failed to set subscriber");
-/// }
+/// #[tokio::main]
+/// async fn main() {
+///     // You would typically set up your tracer provider here
 ///
-/// fn main() {
-///     let subscriber = get_subscriber("app".into(), "info".into());
-///     init_subscriber(subscriber);
+///     let app = Router::new()
+///         .route("/hello", get(hello))
+///         // Create a new OtelLayer with the DefaultRootSpanBuilder
+///         .layer(OtelLayer::<DefaultRootSpanBuilder>::new());
 ///
-///     let app = App::new().wrap(TracingLogger::default());
+///     // Run the server
+///     // let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+///     // axum::serve(listener, app).await.unwrap();
 /// }
 /// ```
 ///
-/// Like [`actix-web`]'s [`Logger`], in order to use `TracingLogger` inside a Scope, Resource, or
-/// Condition, the [`Compat`] middleware must be used.
+/// # Generic Parameters
 ///
-/// ```rust
-/// use actix_web::middleware::Compat;
-/// use actix_web::{web, App};
-/// use tracing_actix_web::TracingLogger;
+/// *   `R`: The type of the [`RootSpanBuilderTrait`] used to create root spans.
+///     This allows for customization of span attributes and behavior.
+///     [`DefaultRootSpanBuilder`] is provided as a sensible default.
 ///
-/// let app = App::new()
-///     .service(
-///         web::scope("/some/route")
-///             .wrap(Compat::new(TracingLogger::default())),
-///     );
-/// ```
-///
-/// [`actix-web`]: https://docs.rs/actix-web
-/// [`Logger`]: https://docs.rs/actix-web/4.0.0-beta.13/actix_web/middleware/struct.Logger.html
-/// [`Compat`]: https://docs.rs/actix-web/4.0.0-beta.13/actix_web/middleware/struct.Compat.html
-/// [`tracing`]: https://docs.rs/tracing
-pub struct TracingLogger<RootSpan: RootSpanBuilder> {
-    root_span_builder: std::marker::PhantomData<RootSpan>,
+pub struct OtelLayer<R: RootSpanBuilderTrait> {
+    root_span_builder: std::marker::PhantomData<R>,
 }
 
-impl<RootSpan: RootSpanBuilder> Clone for TracingLogger<RootSpan> {
-    fn clone(&self) -> Self {
-        Self::new()
-    }
-}
-
-impl Default for TracingLogger<RootSpanBuilder> {
-    fn default() -> Self {
-        TracingLogger::new()
-    }
-}
-
-impl<RootSpan: RootSpanBuilder> TracingLogger<RootSpan> {
-    pub fn new() -> TracingLogger<RootSpan> {
-        TracingLogger {
-            root_span_builder: Default::default(),
-        }
-    }
-}
-
-impl<S, B, RootSpan> Transform<S, ServiceRequest> for TracingLogger<RootSpan>
-where
-    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
-    S::Future: 'static,
-    B: MessageBody + 'static,
-    RootSpan: RootSpanBuilder,
-{
-    type Response = ServiceResponse<StreamSpan<B>>;
-    type Error = Error;
-    type Transform = TracingLoggerMiddleware<S, RootSpan>;
-    type InitError = ();
-    type Future = Ready<Result<Self::Transform, Self::InitError>>;
-
-    fn new_transform(&self, service: S) -> Self::Future {
-        ready(Ok(TracingLoggerMiddleware {
-            service,
+impl<R: RootSpanBuilderTrait> OtelLayer<R> {
+    pub fn new() -> Self {
+        OtelLayer {
             root_span_builder: std::marker::PhantomData,
-        }))
-    }
-}
-
-#[doc(hidden)]
-pub struct TracingLoggerMiddleware<S, RootSpanBuilder> {
-    service: S,
-    root_span_builder: std::marker::PhantomData<RootSpanBuilder>,
-}
-
-#[allow(clippy::type_complexity)]
-impl<S, B, RootSpanType> Service<ServiceRequest> for TracingLoggerMiddleware<S, RootSpanType>
-where
-    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
-    S::Future: 'static,
-    B: MessageBody + 'static,
-    RootSpanType: RootSpanBuilder,
-{
-    type Response = ServiceResponse<StreamSpan<B>>;
-    type Error = Error;
-    type Future = TracingResponse<S::Future, RootSpanType>;
-
-    actix_web::dev::forward_ready!(service);
-
-    fn call(&self, req: ServiceRequest) -> Self::Future {
-        req.extensions_mut().insert(RequestId::generate());
-        let root_span = RootSpanType::on_request_start(&req);
-
-        let root_span_wrapper = RootSpan::new(root_span.clone());
-        req.extensions_mut().insert(root_span_wrapper);
-
-        let fut = root_span.in_scope(|| self.service.call(req));
-
-        TracingResponse {
-            fut,
-            span: root_span,
-            _root_span_type: std::marker::PhantomData,
         }
     }
 }
 
-#[doc(hidden)]
-#[pin_project::pin_project]
-pub struct TracingResponse<F, RootSpanType> {
-    #[pin]
-    fut: F,
-    span: Span,
-    _root_span_type: std::marker::PhantomData<RootSpanType>,
+impl<R: RootSpanBuilderTrait> Clone for OtelLayer<R> {
+    fn clone(&self) -> Self {
+        Self {
+            root_span_builder: std::marker::PhantomData,
+        }
+    }
 }
 
-#[doc(hidden)]
-#[pin_project::pin_project]
-pub struct StreamSpan<B> {
-    #[pin]
-    body: B,
-    span: Span,
-}
-
-impl<F, B, RootSpanType> Future for TracingResponse<F, RootSpanType>
+// Implement tower::Layer for OtelLayer
+// R is now RootSpanBuilderTrait
+impl<Svc, R> Layer<Svc> for OtelLayer<R>
 where
-    F: Future<Output = Result<ServiceResponse<B>, Error>>,
-    B: MessageBody + 'static,
-    RootSpanType: RootSpanBuilder,
+    R: RootSpanBuilderTrait + Clone + Send + Sync + 'static + Default,
+    Svc: Service<Request<axum::body::BoxBody>> + Clone + Send + 'static, // axum::body::BoxBody is a common body type for Axum
+    Svc::Future: Send + 'static,
+    Svc::Response: Send + 'static,
+    Svc::Error: Into<Error> + Send + Sync + 'static,
 {
-    type Output = Result<ServiceResponse<StreamSpan<B>>, Error>;
+    type Service = OtelMiddleware<Svc, R>;
+
+    fn layer(&self, inner: Svc) -> Self::Service {
+        OtelMiddleware {
+            inner,
+            _root_span_builder: std::marker::PhantomData,
+        }
+    }
+}
+
+// OtelMiddleware implements tower::Service
+// R is now RootSpanBuilderTrait
+#[derive(Clone)]
+pub struct OtelMiddleware<S, R> {
+    inner: S,
+    _root_span_builder: std::marker::PhantomData<R>,
+}
+
+// Define the ResponseFuture to handle the lifecycle of the span
+// R is now RootSpanBuilderTrait
+#[pin_project]
+pub struct ResponseFuture<F, R, ResBody, SErr>
+where
+    R: RootSpanBuilderTrait, 
+    F: Future<Output = Result<Response<ResBody>, SErr>>,
+    SErr: Into<Error>,
+{
+    #[pin]
+    inner_future: F,
+    span: Span,
+    root_span_builder: R, 
+    _phantom_resp: std::marker::PhantomData<ResBody>,
+    _phantom_err: std::marker::PhantomData<SErr>,
+}
+
+// R is now RootSpanBuilderTrait
+impl<F, R, ResBody, SErr> Future for ResponseFuture<F, R, ResBody, SErr>
+where
+    R: RootSpanBuilderTrait, 
+    F: Future<Output = Result<Response<ResBody>, SErr>>,
+    SErr: Into<Error>, 
+{
+    type Output = Result<Response<ResBody>, Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
+        let span = this.span.clone();
+        let root_span_builder = this.root_span_builder;
 
-        let fut = this.fut;
-        let span = this.span;
+        let _enter = span.enter();
 
-        span.in_scope(|| match fut.poll(cx) {
+        match this.inner_future.poll(cx) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(outcome) => {
-                RootSpanType::on_request_end(Span::current(), &outcome);
-
-                #[cfg(feature = "emit_event_on_error")]
-                {
-                    emit_event_on_error(&outcome);
-                }
-
-                Poll::Ready(outcome.map(|service_response| {
-                    service_response.map_body(|_, body| StreamSpan {
-                        body,
-                        span: span.clone(),
-                    })
-                }))
+            Poll::Ready(outcome_result) => {
+                let outcome_for_otel = outcome_result.map_err(Into::into);
+                root_span_builder.on_request_end(span, &outcome_for_otel, &[]); 
+                Poll::Ready(outcome_for_otel)
             }
-        })
+        }
     }
 }
 
-impl<B> MessageBody for StreamSpan<B>
+// Tower Service implementation for OtelMiddleware
+// R is now RootSpanBuilderTrait
+impl<S, R, ReqBody, ResBody> Service<Request<ReqBody>> for OtelMiddleware<S, R>
 where
-    B: MessageBody,
+    R: RootSpanBuilderTrait + Clone + Send + Sync + 'static + Default, 
+    S: Service<Request<ReqBody>, Response = Response<ResBody>> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+    S::Error: Into<Error> + Send + Sync + 'static,
+    ReqBody: Send + 'static,
+    ResBody: Send + 'static,
 {
-    type Error = B::Error;
+    type Response = Response<ResBody>;
+    type Error = Error;
+    type Future = ResponseFuture<S::Future, R, ResBody, S::Error>;
 
-    fn size(&self) -> BodySize {
-        self.body.size()
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx).map_err(Into::into)
     }
 
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Self::Error>>> {
-        let this = self.project();
+    fn call(&mut self, mut req: Request<ReqBody>) -> Self::Future {
+        let root_span_builder_instance = R::default();
+        let span = root_span_builder_instance.on_request_start(&req, &[]);
+        let _enter = span.enter();
 
-        let body = this.body;
-        let span = this.span;
-        span.in_scope(|| body.poll_next(cx))
-    }
-}
+        let extensions = req.extensions_mut();
+        extensions.insert(RequestId::generate());
+        extensions.insert(RootSpan::new(span.clone()));
 
-fn emit_event_on_error<B: 'static>(outcome: &Result<ServiceResponse<B>, actix_web::Error>) {
-    match outcome {
-        Ok(response) => {
-            if let Some(err) = response.response().error() {
-                // use the status code already constructed for the outgoing HTTP response
-                emit_error_event(err.as_response_error(), response.status())
-            }
+        let response_future = self.inner.call(req);
+
+        ResponseFuture {
+            inner_future: response_future,
+            span: span.clone(),
+            root_span_builder: root_span_builder_instance,
+            _phantom_resp: std::marker::PhantomData,
+            _phantom_err: std::marker::PhantomData,
         }
-        Err(error) => {
-            let response_error = error.as_response_error();
-            emit_error_event(response_error, response_error.status_code())
-        }
-    }
-}
-
-fn emit_error_event(response_error: &dyn ResponseError, status_code: StatusCode) {
-    let error_msg_prefix = "Error encountered while processing the incoming HTTP request";
-    if status_code.is_client_error() {
-        tracing::warn!("{}: {:?}", error_msg_prefix, response_error);
-    } else {
-        tracing::error!("{}: {:?}", error_msg_prefix, response_error);
     }
 }
