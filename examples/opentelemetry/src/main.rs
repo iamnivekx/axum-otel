@@ -4,9 +4,9 @@ use opentelemetry::{global, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{propagation::TraceContextPropagator, Resource};
 use opentelemetry_semantic_conventions::resource;
-use std::io; // Keep for main return type, though might change to anyhow::Result or similar
+use std::io; // Keep for main return type
 use std::sync::LazyLock;
-use axum_otel::{OtelLayer, DefaultRootSpanBuilder}; // Updated middleware imports
+use axum_otel::OtelTraceLayer; // Changed to OtelTraceLayer
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Registry};
 use tokio::net::TcpListener; // For Axum server
@@ -65,10 +65,8 @@ async fn main() -> io::Result<()> { // Consider changing to anyhow::Result for b
     // Setup Axum router and server
     let app = Router::new()
         .route("/hello", get(hello))
-        // Apply the OtelLayer.
-        // OtelLayer::new() takes PhantomData for R, so type annotation is needed if not inferable.
-        // DefaultRootSpanBuilder::default() or ::new() can be used.
-        .layer(OtelLayer::<DefaultRootSpanBuilder>::new());
+        // Apply the OtelTraceLayer with default components.
+        .layer(OtelTraceLayer::new());
 
 
     let listener = TcpListener::bind("127.0.0.1:8080").await?;

@@ -22,13 +22,10 @@
 //!
 //! ## Features
 //!
-//! *   **Automatic Trace Creation:** Generates a root span for each incoming HTTP request.
-//! *   **Context Propagation:** Correctly propagates OpenTelemetry context, linking client-side
-//!     traces with server-side traces.
-//! *   **Customizable Span Attributes:** Use the [`RootSpanBuilderTrait`] to define custom
-//!     attributes for your root spans based on request and response data.
-//! *   **Default Implementation:** Provides a [`DefaultRootSpanBuilder`] that adheres to
-//!     OpenTelemetry semantic conventions for HTTP server spans.
+//! *   **Automatic Trace Creation:** Generates a root span for each incoming HTTP request using `tower-http`'s `TraceLayer`.
+//! *   **Context Propagation:** Correctly propagates OpenTelemetry context.
+//! *   **Customizable Span Lifecycle:** Provides hooks for customizing span creation (`MakeSpan`), response handling (`OnResponse`), and failure handling (`OnFailure`).
+//! *   **Default Implementations:** Offers `DefaultMakeSpan`, `DefaultOnResponse`, and `DefaultOnFailure` that implement OpenTelemetry semantic conventions for HTTP server spans.
 //!
 //! ## Getting Started
 //!
@@ -50,12 +47,12 @@
 //!
 //! ## Usage Example
 //!
-//! The core component is the [`OtelLayer`]. You create it, typically with the
-//! [`DefaultRootSpanBuilder`], and add it to your Axum router.
+//! The core component is the [`OtelTraceLayer`]. You create it and add it to your Axum router.
+//! It uses `DefaultMakeSpan`, `DefaultOnResponse`, and `DefaultOnFailure` by default.
 //!
 //! ```rust,no_run
 //! use axum::{routing::get, Router};
-//! use axum_otel::{OtelLayer, DefaultRootSpanBuilder, RootSpanBuilderTrait}; // Import the trait
+//! use axum_otel::OtelTraceLayer; // Updated main export
 //! use opentelemetry::global;
 //! use opentelemetry_otlp::WithExportConfig;
 //! use opentelemetry_sdk::{propagation::TraceContextPropagator, Resource};
@@ -105,9 +102,9 @@
 //!     // Create an Axum router.
 //!     let app = Router::new()
 //!         .route("/hello", get(hello))
-//!         // Add the OtelLayer.
-//!         // OtelLayer::<DefaultRootSpanBuilder> will use the default span creation logic.
-//!         .layer(OtelLayer::<DefaultRootSpanBuilder>::new());
+//!         // Add the OtelTraceLayer.
+//!         // This will use DefaultMakeSpan, DefaultOnResponse, and DefaultOnFailure.
+//!         .layer(OtelTraceLayer::new());
 //!
 //!     // Define the address and start the server.
 //!     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -123,85 +120,73 @@
 //! }
 //! ```
 //!
-//! ## Customizing Spans
+//! ## Customizing Span Behavior
 //!
-//! If you need to customize the attributes of the root spans (e.g., add application-specific
-//! details from request headers or based on the route), you can implement the
-//! [`RootSpanBuilderTrait`].
+//! `OtelTraceLayer` is built upon `tower-http::trace::TraceLayer`. You can customize its behavior
+//! by providing your own implementations of `MakeSpan`, `OnResponse`, or `OnFailure`.
 //!
-//! ```rust
-//! use axum_otel::{RootSpanBuilderTrait, DefaultRootSpanBuilder};
-//! use http::{Request, Response};
-//! use opentelemetry::KeyValue;
-//! use std::fmt::{Debug, Display};
+//! `DefaultMakeSpan`, `DefaultOnResponse`, and `DefaultOnFailure` are provided by this crate
+//! and aim to follow OpenTelemetry semantic conventions. You can wrap them or replace them.
+//!
+//! ### Example: Customizing `MakeSpan`
+//!
+//! ```rust,no_run
+//! use axum_otel::{OtelTraceLayer, DefaultMakeSpan}; // Import relevant components
+//! use http::Request;
+//! use tower_http::trace::MakeSpan;
 //! use tracing::Span;
 //!
-//! #[derive(Clone, Default)] // Default is required by OtelLayer if used as R where R: Default
-//! struct MyCustomSpanBuilder;
+//! #[derive(Clone, Default)]
+//! struct MyMakeSpan {
+//!     // You can wrap the default or implement entirely custom logic
+//!     inner: DefaultMakeSpan,
+//! }
 //!
-//! impl RootSpanBuilderTrait for MyCustomSpanBuilder {
-//!     fn on_request_start<B>(&self, request: &Request<B>, _custom_attributes: &[KeyValue]) -> Span {
-//!         // Use DefaultRootSpanBuilder to get standard attributes, then customize.
-//!         let default_builder = DefaultRootSpanBuilder;
-//!         let span = default_builder.on_request_start(request, _custom_attributes);
-//!
-//!         // Add a custom attribute.
-//!         span.record("my.custom.attribute", "hello_world");
-//!
-//!         // You could also extract headers here:
-//!         if let Some(custom_header) = request.headers().get("x-custom-header") {
-//!             if let Ok(value_str) = custom_header.to_str() {
-//!                 span.record("http.request.header.x_custom_header", value_str);
-//!             }
-//!         }
+//! impl<B> MakeSpan<B> for MyMakeSpan {
+//!     fn make_span(&mut self, request: &Request<B>) -> Span {
+//!         let span = self.inner.make_span(request); // Call default logic
+//!         // Add custom attributes
+//!         span.record("my.custom.makespan.attribute", "some_value");
 //!         span
-//!     }
-//!
-//!     fn on_request_end<ResBody, E: Display + Debug>(
-//!         &self,
-//!         span: Span,
-//!         outcome: &Result<Response<ResBody>, E>,
-//!         _custom_attributes: &[KeyValue],
-//!     ) {
-//!         // Call the default implementation first.
-//!         let default_builder = DefaultRootSpanBuilder;
-//!         default_builder.on_request_end(span.clone(), outcome, _custom_attributes); // Clone span if needed after use
-//!
-//!         // Add custom logic based on the response or error.
-//!         if let Ok(response) = outcome {
-//!             if response.status().is_success() {
-//!                 span.record("my.custom.status", "successful_request");
-//!             }
-//!         }
 //!     }
 //! }
 //!
-//! // Then, in your Axum setup:
-//! // let app = Router::new().layer(OtelLayer::<MyCustomSpanBuilder>::new());
+//! // In your Axum setup:
+//! // let layer = OtelTraceLayer::new()
+//! //     .make_span_with(MyMakeSpan::default());
+//! // let app = Router::new().layer(layer);
 //! ```
 //!
-//! ## Deprecated `TracingLogger`
+//! Refer to the documentation for `tower_http::trace::TraceLayer` for more details on these traits.
 //!
-//! The previous `TracingLogger` (an Axum `Transform`-based middleware) is now deprecated
-//! in favor of the Tower-idiomatic `OtelLayer`. Users are encouraged to migrate.
+//! ## Deprecated Components
+//!
+//! The old `TracingLogger` (Axum `Transform`-based) and `OtelLayer` (custom Tower Layer)
+//! are now deprecated. Please migrate to `OtelTraceLayer`.
 //!
 //! For more details on specific components, please refer to their respective documentation:
-//! *   [`OtelLayer`]
-//! *   [`RootSpanBuilderTrait`]
-//! *   [`DefaultRootSpanBuilder`]
+//! *   [`OtelTraceLayer`]
+//! *   [`DefaultMakeSpan`]
+//! *   [`DefaultOnResponse`]
+//! *   [`DefaultOnFailure`]
 
 mod axum;
 mod header_extractor;
 mod middleware;
 mod root_span;
-mod root_span_builder;
+mod root_span_builder; // File is now empty, contains only comments.
 
-// New Tower-idiomatic exports
-pub use crate::middleware::OtelLayer;
-pub use crate::root_span_builder::RootSpanBuilderTrait;
-pub use crate::root_span_builder::DefaultRootSpanBuilder;
+// Exports for the tower-http::trace::TraceLayer based middleware
+pub use crate::middleware::OtelTraceLayer;
+pub use crate::middleware::DefaultMakeSpan;
+pub use crate::middleware::DefaultOnResponse;
+pub use crate::middleware::DefaultOnFailure;
 
-// Existing exports (TracingLogger is now deprecated via attribute in middleware.rs)
+// RootSpanBuilderTrait and DefaultRootSpanBuilder are removed.
+// pub use crate::root_span_builder::RootSpanBuilderTrait; // Removed
+// pub use crate::root_span_builder::DefaultRootSpanBuilder; // Removed
+
+// Deprecated TracingLogger and associated StreamSpan
 pub use middleware::{StreamSpan, TracingLogger};
 pub use root_span::RootSpan;
 // Problematic old export below is removed.
