@@ -10,7 +10,7 @@ use tracing_actix_web::TracingLogger;
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Registry};
 
-const APP_NAME: &str = "tracing-actix-web-demo";
+const APP_NAME: &str = "axum-otel-demo";
 
 static RESOURCE: LazyLock<Resource> = LazyLock::new(|| {
     Resource::builder()

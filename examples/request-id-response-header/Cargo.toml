@@ -6,5 +6,5 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-actix-web = "4"
-tracing-actix-web = { path = "../.." }
+axum = "0.8"
+axum-otel = { path = "../../crates/axum-otel" }

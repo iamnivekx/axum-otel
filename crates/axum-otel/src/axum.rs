@@ -8,7 +8,7 @@
 
 use axum::{
     extract::{ConnectInfo, MatchedPath}, // Added ConnectInfo
-    http::{HeaderMap, Request, StatusCode, Version}, // Added Version
+    http,                                // Added Version
     response::Response,
 };
 use futures_util::future::BoxFuture;
@@ -16,7 +16,7 @@ use opentelemetry::KeyValue; // Added KeyValue for convenience
 use opentelemetry::{
     Context, global,
     propagation::Extractor,
-    trace::{SpanKind, StatusCode as OtelStatusCode, TraceContextExt, Tracer},
+    trace::{SpanKind, StatusCode, TraceContextExt, Tracer},
 };
 use std::net::SocketAddr; // Added SocketAddr
 use std::{
@@ -36,9 +36,7 @@ use uuid::Uuid; // Added for request_id
 
 /// Builder for `OtelLayer`.
 #[derive(Clone, Debug, Default)]
-pub struct OtelLayerBuilder {
-    exclusions: Vec<String>,
-}
+pub struct OtelLayerBuilder {}
 
 impl OtelLayerBuilder {
     /// Creates a new `OtelLayerBuilder` with default settings.
@@ -46,45 +44,14 @@ impl OtelLayerBuilder {
         Self::default()
     }
 
-    /// Adds a single path to be excluded from tracing.
-    /// Paths should be exact matches (e.g., "/health/live").
-    pub fn exclude_path(mut self, path: String) -> Self {
-        self.exclusions.push(path);
-        self
-    }
-
-    /// Adds multiple paths to be excluded from tracing.
-    /// Paths should be exact matches.
-    pub fn exclude_paths(mut self, paths: Vec<String>) -> Self {
-        self.exclusions.extend(paths);
-        self
-    }
-
     /// Builds the `OtelLayer` with the configured options.
     pub fn build(self) -> OtelLayer {
-        OtelLayer {
-            exclusions: Arc::new(self.exclusions),
-        }
-    }
-}
-
-// Helper struct for header extraction
-struct HeaderExtractor<'a>(&'a HeaderMap);
-
-impl<'a> Extractor for HeaderExtractor<'a> {
-    fn get(&self, key: &str) -> Option<&str> {
-        self.0.get(key).and_then(|value| value.to_str().ok())
-    }
-
-    fn keys(&self) -> Vec<&str> {
-        self.0.keys().map(|value| value.as_str()).collect()
+        OtelLayer {}
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct OtelLayer {
-    exclusions: Arc<Vec<String>>,
-}
+pub struct OtelLayer {}
 
 impl OtelLayer {
     /// Returns a new `OtelLayerBuilder` to construct an `OtelLayer`.
@@ -97,10 +64,7 @@ impl<S> Layer<S> for OtelLayer {
     type Service = OtelService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        OtelService {
-            inner,
-            exclusions: self.exclusions.clone(),
-        }
+        OtelService { inner }
     }
 }
 
@@ -125,18 +89,7 @@ where
     }
 
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
-        // Check for exclusions before any tracing logic
-        let path_to_check = req.uri().path();
-        if self
-            .exclusions
-            .iter()
-            .any(|excluded_path| excluded_path == path_to_check)
-        {
-            // If the path is in exclusions, bypass tracing and call inner service directly
-            return self.inner.call(req);
-        }
-
-        init_tracing(); // Ensure tracing is initialized if not excluded
+        init_tracing(); // Ensure tracing is initialized
 
         let parent_cx = global::get_text_map_propagator(|propagator| {
             propagator.extract(&HeaderExtractor(req.headers()))

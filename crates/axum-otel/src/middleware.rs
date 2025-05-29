@@ -4,7 +4,7 @@ use axum::dev::{Service, ServiceRequest, ServiceResponse, Transform};
 use axum::http::StatusCode;
 use axum::web::Bytes;
 use axum::{Error, HttpMessage, ResponseError};
-use std::future::{ready, Future, Ready};
+use std::future::{Future, Ready, ready};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tracing::Span;
