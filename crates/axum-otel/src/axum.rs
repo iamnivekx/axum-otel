@@ -8,7 +8,7 @@
 
 use axum::{
     extract::{ConnectInfo, MatchedPath}, // Added ConnectInfo
-    http,                                // Added Version
+    http::{self, Version},
     response::Response,
 };
 use futures_util::future::BoxFuture;
@@ -28,7 +28,6 @@ use std::{
 };
 use tower_layer::Layer;
 use tower_service::Service;
-use tracing_crate as tracing; // Renaming to avoid conflict if `tracing` is also a direct dep
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid; // Added for request_id
 
@@ -89,7 +88,6 @@ where
     }
 
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
-        init_tracing(); // Ensure tracing is initialized
 
         let parent_cx = global::get_text_map_propagator(|propagator| {
             propagator.extract(&HeaderExtractor(req.headers()))
@@ -436,7 +434,6 @@ mod tests {
     #[tokio::test]
     async fn test_otel_layer_init_otel_layer_default() {
         let exporter = setup_test_tracer();
-        // init_tracing(); // Call the actual init_tracing from the lib
 
         let app = Router::new()
             .route("/default_test", get(simple_handler))

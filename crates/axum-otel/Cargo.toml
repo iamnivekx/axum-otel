@@ -4,14 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+tracing = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-http = { workspace = true }
 opentelemetry-otlp = { workspace = true }
-opentelemetry-sdk = { workspace = true }
+opentelemetry_sdk = { workspace = true }
 opentelemetry-semantic-conventions = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 axum = { workspace = true }
-pin-project = { workspace = true }
-tracing = { workspace = true }
+pin-project-lite = { workspace = true }
 uuid = { workspace = true }
 tower-http = { workspace = true }

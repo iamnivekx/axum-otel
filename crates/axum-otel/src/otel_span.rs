@@ -1,16 +1,18 @@
 //! Module defining utilities for crating `tracing` spans compatible with OpenTelemetry's
 //! conventions.
-use std::net::SocketAddr;
-
-use axum::extract::{ConnectInfo, MatchedPath};
-use http::header;
+use axum::{
+    extract::{ConnectInfo, MatchedPath},
+    http,
+};
 use opentelemetry::trace::TraceContextExt;
+use std::net::SocketAddr;
 use tower_http::{
     classify::ServerErrorsFailureClass,
     trace::{MakeSpan, OnFailure, OnResponse},
 };
 use tracing::field::{Empty, debug};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use uuid::Uuid;
 
 /// An implementor of [`MakeSpan`] which creates `tracing` spans populated with information about
 /// the request received by an `axum` web server.
@@ -19,14 +21,25 @@ pub struct AxumOtelSpanLayer;
 
 impl<B> MakeSpan<B> for AxumOtelSpanLayer {
     fn make_span(&mut self, request: &http::Request<B>) -> tracing::Span {
+        let http_method = request.method().as_str();
+        let http_route_opt = request
+            .extensions()
+            .get::<MatchedPath>()
+            .map(|p| p.as_str());
+
+        let span_name = http_route_opt.as_ref().map_or_else(
+            || http_method.to_string(),
+            |route| format!("{} {}", http_method, route),
+        );
+
         let user_agent = request
             .headers()
-            .get(header::USER_AGENT)
+            .get(http::header::USER_AGENT)
             .and_then(|header| header.to_str().ok());
 
         let host = request
             .headers()
-            .get(header::HOST)
+            .get(http::header::HOST)
             .and_then(|header| header.to_str().ok());
 
         let http_route = request
@@ -49,7 +62,7 @@ impl<B> MakeSpan<B> for AxumOtelSpanLayer {
                     .get("request-id")
                     .and_then(|v| v.to_str().map(ToOwned::to_owned).ok())
             })
-            .unwrap_or_else(|| KsuidMs::new(None, None).to_string());
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
 
         let remote_context = opentelemetry::global::get_text_map_propagator(|p| {
             p.extract(&opentelemetry_http::HeaderExtractor(request.headers()))
@@ -62,7 +75,6 @@ impl<B> MakeSpan<B> for AxumOtelSpanLayer {
 
         let span = tracing::error_span!(
             "HTTP request",
-            grpc.code = Empty,
             http.client_ip = client_ip,
             http.versions = ?request.version(),
             http.host = host,
@@ -76,8 +88,8 @@ impl<B> MakeSpan<B> for AxumOtelSpanLayer {
             otel.status_code = Empty,
             request_id,
             trace_id,
-            org_id = tracing::field::Empty,
-            app_id = tracing::field::Empty,
+            org_id = Empty,
+            app_id = Empty,
         );
 
         span.set_parent(remote_context);

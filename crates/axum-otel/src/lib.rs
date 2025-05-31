@@ -9,7 +9,7 @@
     unused_qualifications
 )]
 #![doc(html_root_url = "https://docs.rs/axum-otel/0.1.0")] // TODO: Update version
-// Removed: #![doc = include_str!("../README.md")] 
+// Removed: #![doc = include_str!("../README.md")]
 
 //! # axum-otel: OpenTelemetry Tracing for Axum Web Framework
 //!
@@ -170,30 +170,11 @@
 //! *   [`DefaultOnResponse`]
 //! *   [`DefaultOnFailure`]
 
-mod axum;
 mod header_extractor;
-mod middleware;
-mod root_span;
-mod root_span_builder; // File is now empty, contains only comments.
+mod otel_span;
 
 // Exports for the tower-http::trace::TraceLayer based middleware
-pub use crate::middleware::OtelTraceLayer;
-pub use crate::middleware::DefaultMakeSpan;
-pub use crate::middleware::DefaultOnResponse;
-pub use crate::middleware::DefaultOnFailure;
-
-// RootSpanBuilderTrait and DefaultRootSpanBuilder are removed.
-// pub use crate::root_span_builder::RootSpanBuilderTrait; // Removed
-// pub use crate::root_span_builder::DefaultRootSpanBuilder; // Removed
-
-// Deprecated TracingLogger and associated StreamSpan
-pub use middleware::{StreamSpan, TracingLogger};
-pub use root_span::RootSpan;
-// Problematic old export below is removed.
-// Re-exporting the `Level` enum since it's used in our `root_span!` macro
+pub use otel_span::AxumOtelOnFailure;
+pub use otel_span::AxumOtelOnResponseLayer;
+pub use otel_span::AxumOtelSpanLayer;
 pub use tracing::Level;
-
-mod otel;
-mod otel_span;
-#[doc(hidden)]
-pub mod root_span_macro; // Consider if this should be public or removed if not used by new API
