@@ -71,10 +71,6 @@ async fn main() {
         .await
         .unwrap();
 }
-
-async fn handler() -> &'static str {
-    "Hello, World!"
-}
 ```
 
 ## Examples
@@ -85,11 +81,19 @@ Check out the [examples](./examples) directory for more usage examples:
 
 ## Documentation
 
-For more detailed documentation, visit [docs.rs](https://docs.rs/axum-otel/).
+Here are some key resources to help you get started and make the most of `axum-otel`:
+
+- [`README.md`](./README.md): (This file) Project overview, installation, and quick start guide.
+- [`CONTRIBUTING.md`](./CONTRIBUTING.md): Guidelines for contributing to the project.
+- [`CHANGELOG.md`](./CHANGELOG.md): Project version history and notable changes.
+- [`docs.rs/axum-otel`](https://docs.rs/axum-otel/): Comprehensive API documentation.
+- [Examples](./examples/): Practical usage examples demonstrating various features.
+
+For more detailed API documentation, visit [docs.rs](https://docs.rs/axum-otel/).
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+For contribution guidelines, please see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 

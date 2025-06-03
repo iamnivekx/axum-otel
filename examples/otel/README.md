@@ -17,7 +17,7 @@ You can launch this example with
 cargo run
 ```
 
-An `web` application will be listening on port `8080`.  
+A `web` application will be listening on port `8080`.  
 You can fire requests to it with:
 
 ```bash
