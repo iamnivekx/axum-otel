@@ -64,7 +64,16 @@ impl OnFailure<ServerErrorsFailureClass> for AxumOtelOnFailure {
             ServerErrorsFailureClass::StatusCode(status) if status.is_server_error() => {
                 span.record("otel.status_code", "ERROR");
             }
-            _ => {}
+            // Also mark as ERROR for ServerErrorsFailureClass::Error, which indicates an
+            // error happened while processing the request, even if not resulting in a 5xx.
+            ServerErrorsFailureClass::Error(_) => {
+                span.record("otel.status_code", "ERROR");
+            }
+            _ => {
+                // For other cases (e.g., client errors 4xx classified as failure by Tower,
+                // or other custom failure classifications), we don't mark otel.status_code as ERROR.
+                // The http.status_code attribute will still reflect the actual status.
+            }
         }
     }
 }

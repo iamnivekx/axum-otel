@@ -95,7 +95,7 @@ mod tests {
         tracing_subscriber::registry()
             .with(telemetry)
             .try_init()
-            .unwrap_or_default();
+            .expect("Failed to initialize tracing subscriber for tests");
 
         // Create a root span to ensure we have a valid trace context
         let _root_span = tracing::info_span!("root_span").entered();
