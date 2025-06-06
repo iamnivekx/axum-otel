@@ -1,15 +1,17 @@
 //! This module defines "tokens" that represent telemetry attributes and provides
-//! configurations for attribute selection.
+//! sets of these tokens for configuring attribute recording.
 //!
-//! Users typically interact with these concepts through the `AttributeSelection` enum
-//! and the builder methods on `AxumOtelSpanCreator` and `AxumOtelOnResponse`.
-//! This module provides the underlying constants and mappings.
+//! The token constants defined herein (e.g., `TOKEN_HTTP_REQUEST_METHOD`) are intended
+//! for use with the fluent builder methods `with_token()` and `without_token()` on
+//! `AxumOtelSpanCreator` and `AxumOtelOnResponse`.
+//!
+//! Predefined sets like `MANDATORY_TOKENS`, `BASIC_TOKENS`, and `ALL_RECOGNIZED_TOKENS`
+//! are used by the `select_none()`, `select_basic_set()`, and `select_full_set()` builder methods.
 //!
 //! For a conceptual overview of attribute selection, refer to the main library
-//! documentation, particularly the `AttributeSelection` enum and the crate-level
-//! section on "Attribute Configuration".
+//! documentation, particularly the crate-level section on "Attribute Configuration".
 
-use crate::{AttributeSelection, AttributeVerbosity};
+use crate::AttributeVerbosity; // AttributeSelection is no longer directly used by users of builders
 use phf::{phf_map, phf_set, Set as PhfSet};
 use std::collections::HashSet;
 
@@ -153,6 +155,23 @@ pub static ALL_RECOGNIZED_TOKENS: PhfSet<&'static str> = phf_set! {
     TOKEN_HTTP_RESPONSE_BODY_SIZE,
     TOKEN_RESPONSE_TIME_MS,
 };
+
+/// All tokens that `AxumOtelOnResponse` can potentially record.
+/// This represents the `AttributeVerbosity::Full` level for the `OnResponse` handler.
+pub static ALL_ON_RESPONSE_RECOGNIZED_TOKENS: PhfSet<&'static str> = phf_set! {
+    // Specific to OnResponse
+    TOKEN_HTTP_RESPONSE_STATUS_CODE,
+    TOKEN_OTEL_STATUS_CODE, // Set to "OK"
+    TOKEN_HTTP_RESPONSE_BODY_SIZE,
+    TOKEN_RESPONSE_TIME_MS,
+    // Relevant from MANDATORY_TOKENS (if not already covered)
+    // Note: Most MANDATORY_TOKENS are request-related or span identity.
+    // TOKEN_REQUEST_ID, TOKEN_TRACE_ID might be on the span but not set by OnResponse itself.
+    // We include them here if `OnResponse` might *read* or *could* set them,
+    // or if "full" for response means including all identifiable parts of the span.
+    // For now, focusing on what OnResponse *writes*.
+};
+
 
 // --- Helper Function for Filtering ---
 

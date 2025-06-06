@@ -115,62 +115,70 @@ async fn main() -> Result<()> {
                 .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
                 .layer(
                     TraceLayer::new_for_http()
-                        // Example: Configure attribute selection using an Include list.
-                        // Only specified tokens (and mandatory ones) will be recorded.
+                        // Example: Configure attribute selection using the fluent builder API.
+                        // This setup starts with a basic set and adds specific tokens.
                         .make_span_with(
                             AxumOtelSpanCreator::new()
                                 .level(Level::INFO)
-                                .attribute_selection(AttributeSelection::Include(vec![
-                                    config::TOKEN_HTTP_REQUEST_METHOD.to_string(),
-                                    config::TOKEN_URL_PATH.to_string(),
-                                    config::TOKEN_USER_AGENT_ORIGINAL.to_string(),
-                                    // Note: http.route is mandatory, will be included anyway
-                                ])),
+                                .select_basic_set() // Start with Basic + Mandatory attributes
+                                .with_token(config::TOKEN_USER_AGENT_ORIGINAL) // Add User-Agent
+                                .with_token(config::TOKEN_URL_QUERY),     // Add URL Query
                         )
                         .on_response(
                             AxumOtelOnResponse::new()
                                 .level(Level::INFO)
-                                .attribute_selection(AttributeSelection::Include(vec![
-                                    config::TOKEN_HTTP_RESPONSE_STATUS_CODE.to_string(),
-                                    config::TOKEN_RESPONSE_TIME_MS.to_string(),
-                                    // Note: otel.status_code is mandatory, will be included anyway
-                                ])),
+                                .select_basic_set() // Basic for response might not include response_time_ms by default
+                                .with_token(config::TOKEN_RESPONSE_TIME_MS) // Explicitly add response time
+                                .with_token(config::TOKEN_HTTP_RESPONSE_BODY_SIZE), // And response body size
                         )
                         .on_failure(AxumOtelOnFailure::new().level(Level::ERROR)),
                 )
                 .layer(PropagateRequestIdLayer::x_request_id()),
         );
 
-    // Comments explaining AttributeSelection:
-    // The example above uses `AttributeSelection::Include` to specify exactly which attributes
-    // (identified by their tokens) should be recorded, in addition to a set of always-on
-    // mandatory attributes (like request_id, trace_id, http.route, otel.name, otel.kind).
-    // For example, with the Include list above, you'd get:
-    // - From AxumOtelSpanCreator: http.request.method, url.path, user_agent.original (plus mandatory).
-    // - From AxumOtelOnResponse: http.response.status_code, response_time_ms (plus mandatory otel.status_code).
-    // Other attributes like `client.address`, `url.query`, `http.response.body.size` would be omitted.
+    // Comments explaining Attribute Selection with the fluent builder API:
+    // The example above demonstrates starting with a basic set of attributes and adding specific
+    // ones using `.with_token()`. This provides a balance between conciseness and control.
+    //
+    // Expected attributes with the above configuration (token names):
+    // - Mandatory: "otel.name", "otel.kind", "http.request.method", "http.route", "url.path",
+    //              "request_id", "trace_id", "http.response.status_code", "otel.status_code".
+    // - Basic: (Tokens defined in `config::BASIC_TOKENS`, if any beyond mandatory).
+    // - Specifically added by make_span_with: "user_agent.original", "url.query".
+    // - Specifically added by on_response: "response_time_ms", "http.response.body.size".
 
-    // Other AttributeSelection options:
+    // Other common ways to configure attribute selection:
     //
-    // 1. Exclude List: Record all attributes (Full verbosity) *except* those specified.
-    //    Useful for removing a few specific, noisy attributes.
-    //    Example:
-    //    .attribute_selection(AttributeSelection::Exclude(vec![
-    //        config::TOKEN_USER_AGENT_ORIGINAL.to_string(),
-    //        config::TOKEN_URL_QUERY.to_string(),
-    //    ]))
+    // 1. Start with the Full set and remove a few unwanted tokens:
+    //    ```rust
+    //    # use axum_otel::{AxumOtelSpanCreator, config, Level};
+    //    # let _ = AxumOtelSpanCreator::new()
+    //    // .select_full_set() // This is default if `new()` is used, so often not needed.
+    //    .without_token(config::TOKEN_CLIENT_ADDRESS)
+    //    .without_token(config::TOKEN_URL_FULL);
+    //    ```
     //
-    // 2. Predefined Levels (simpler):
-    //    - `AttributeSelection::Level(AttributeVerbosity::Full)`: Records all defined attributes.
-    //      This is the default if `attribute_selection()` or `attribute_verbosity()` isn't called.
-    //    - `AttributeSelection::Level(AttributeVerbosity::Basic)`: Records a minimal set of attributes.
-    //    Example:
-    //    .attribute_selection(AttributeSelection::Level(AttributeVerbosity::Basic))
-    //    // or using the convenience method:
-    //    // .attribute_verbosity(AttributeVerbosity::Basic)
+    // 2. Start with only Mandatory tokens and add just one or two specific ones:
+    //    ```rust
+    //    # use axum_otel::{AxumOtelSpanCreator, config, Level};
+    //    # let _ = AxumOtelSpanCreator::new()
+    //    .select_none() // Start with only mandatory attributes
+    //    .with_token(config::TOKEN_HTTP_REQUEST_METHOD) // Already mandatory, so this is just for illustration
+    //    .with_token(config::TOKEN_USER_AGENT_ORIGINAL);
+    //    ```
     //
-    // Refer to the library documentation (especially the `config` module) for a full list of
-    // available tokens and their corresponding OpenTelemetry attribute keys.
+    // 3. Use the simplest approach with predefined verbosity levels (Full or Basic):
+    //    ```rust
+    //    # use axum_otel::{AxumOtelSpanCreator, AttributeVerbosity, Level};
+    //    # let _ = AxumOtelSpanCreator::new()
+    //    .attribute_verbosity(AttributeVerbosity::Basic); // For Basic set
+    //    // For Full set (default), you can omit .attribute_verbosity() or call:
+    //    // .attribute_verbosity(AttributeVerbosity::Full);
+    //    ```
+    //
+    // Refer to the library documentation (especially the `config` module and the
+    // crate-level section on "Attribute Configuration") for a full list of available tokens
+    // and their corresponding OpenTelemetry attribute keys.
 
     let listener = TcpListener::bind("127.0.0.1:8080").await?;
     info!("Server is running on http://127.0.0.1:8080 (ensure OTLP collector is at http://localhost:4317)");

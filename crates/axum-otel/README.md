@@ -33,8 +33,9 @@ use axum::{
 };
 // Import for attribute control
 use axum_otel::{
-    AttributeSelection, AttributeVerbosity, AxumOtelOnFailure, AxumOtelOnResponse,
-    AxumOtelSpanCreator, config, // config for token constants if you want to be explicit
+    AttributeVerbosity, // For simple presets
+    AxumOtelOnFailure, AxumOtelOnResponse, AxumOtelSpanCreator,
+    config, // For token constants (e.g., config::TOKEN_USER_AGENT_ORIGINAL)
 };
 use opentelemetry::sdk::trace::Config;
 use opentelemetry_otlp::{WithExportConfig, Protocol};
@@ -67,16 +68,17 @@ async fn main() {
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(
-                    AxumOtelSpanCreator::new()
+                    AxumOtelSpanCreator::new() // Defaults to .select_full_set()
                         .level(Level::INFO)
-                        // Example: Set to Basic verbosity level.
-                        // Default is AttributeSelection::Level(AttributeVerbosity::Full).
-                        .attribute_selection(AttributeSelection::Level(AttributeVerbosity::Basic)),
+                        // Example: Start with basic, then add specific tokens
+                        // .select_basic_set()
+                        // .with_token(config::TOKEN_USER_AGENT_ORIGINAL)
                 )
                 .on_response(
-                    AxumOtelOnResponse::new()
+                    AxumOtelOnResponse::new() // Defaults to .select_full_set()
                         .level(Level::INFO)
-                        .attribute_selection(AttributeSelection::Level(AttributeVerbosity::Basic)),
+                        // Example: Use basic verbosity for response attributes
+                        // .attribute_verbosity(AttributeVerbosity::Basic)
                 )
                 .on_failure(AxumOtelOnFailure::new()),
         );
@@ -93,60 +95,66 @@ async fn main() {
 
 ### Attribute Selection and Control
 
-`axum-otel` offers flexible control over the telemetry attributes recorded on spans via the `AttributeSelection` enum. This allows tailoring the data to specific needs, potentially reducing telemetry volume and associated costs.
+`axum-otel` provides fine-grained control over telemetry attributes using a fluent builder API on `AxumOtelSpanCreator` and `AxumOtelOnResponse`. This allows you to precisely manage the set of recorded attributes, optimizing data volume and relevance.
 
-The selection is configured on `AxumOtelSpanCreator` and `AxumOtelOnResponse`. It's token-based: each piece of information (e.g., HTTP method) has a corresponding "token" string.
+**Key Concepts:**
+- **Tokens:** Each attribute corresponds to a "token" (a string constant defined in `axum_otel::config`).
+- **Selected Set:** Each component maintains a set of tokens for attributes it will record.
+- **Mandatory Attributes:** A [minimal set of essential attributes](https_docs.rs/axum-otel/latest/axum_otel/index.html#mandatory-attributes) are always recorded. These cannot be removed by `without_token()`.
 
-**Selection Strategies:**
+**Builder Methods:**
 
-1.  **Predefined Levels (`AttributeSelection::Level(AttributeVerbosity)`)**:
-    *   `AttributeVerbosity::Full` (Default): Records all recognized attributes.
-        ```rust
-        # use axum_otel::{AxumOtelSpanCreator, AttributeSelection, AttributeVerbosity, Level};
-        # let mut span_creator = AxumOtelSpanCreator::new();
-        span_creator.attribute_selection(AttributeSelection::Level(AttributeVerbosity::Full));
-        // Or, as it's the default:
-        // let span_creator_full = AxumOtelSpanCreator::new();
-        // Or using the convenience method:
-        // span_creator.attribute_verbosity(AttributeVerbosity::Full);
-        ```
-    *   `AttributeVerbosity::Basic`: Records a minimal set of essential attributes.
-        ```rust
-        # use axum_otel::{AxumOtelSpanCreator, AttributeSelection, AttributeVerbosity, Level};
-        # let mut span_creator = AxumOtelSpanCreator::new();
-        span_creator.attribute_selection(AttributeSelection::Level(AttributeVerbosity::Basic));
-        // Or using the convenience method:
-        // span_creator.attribute_verbosity(AttributeVerbosity::Basic);
-        ```
+-   `::new()`: Initializes with all recognized tokens selected (Full verbosity).
+-   `.select_full_set()`: Selects all recognized tokens.
+-   `.select_basic_set()`: Selects mandatory and basic tokens.
+-   `.select_none()`: Selects only mandatory tokens.
+-   `.with_token(token_str)`: Adds a specific token to the selected set.
+-   `.without_token(token_str)`: Removes a specific token (if not mandatory).
+-   `.attribute_verbosity(AttributeVerbosity::Basic/Full)`: A simpler way to select predefined Basic or Full sets.
 
-2.  **Include List (`AttributeSelection::Include(Vec<String>)`)**:
-    Records only attributes for the specified tokens, plus a [mandatory minimal set](#mandatory-attributes).
+**Configuration Examples:**
+
+1.  **Default (Full Verbosity):**
     ```rust
-    # use axum_otel::{AxumOtelSpanCreator, AttributeSelection, config, Level};
-    # let mut span_creator = AxumOtelSpanCreator::new();
-    span_creator.attribute_selection(AttributeSelection::Include(vec![
-        config::TOKEN_HTTP_REQUEST_METHOD.to_string(), // "http.request.method"
-        config::TOKEN_USER_AGENT_ORIGINAL.to_string(), // "user_agent.original"
-        // ... other desired tokens
-    ]));
+    # use axum_otel::{AxumOtelSpanCreator, Level};
+    let span_creator = AxumOtelSpanCreator::new(); // Records all attributes
     ```
 
-3.  **Exclude List (`AttributeSelection::Exclude(Vec<String>)`)**:
-    Records all attributes from the `Full` set *except* those for the specified tokens. Mandatory attributes are always included.
+2.  **Basic Set:** For a lean set of attributes.
     ```rust
-    # use axum_otel::{AxumOtelSpanCreator, AttributeSelection, config, Level};
-    # let mut span_creator = AxumOtelSpanCreator::new();
-    span_creator.attribute_selection(AttributeSelection::Exclude(vec![
-        config::TOKEN_URL_QUERY.to_string(), // "url.query"
-        config::TOKEN_CLIENT_ADDRESS.to_string(), // "client.address"
-    ]));
+    # use axum_otel::{AxumOtelSpanCreator, Level};
+    let span_creator = AxumOtelSpanCreator::new().select_basic_set();
+    // Or using the convenience method:
+    // let span_creator = AxumOtelSpanCreator::new().attribute_verbosity(axum_otel::AttributeVerbosity::Basic);
     ```
 
-**Mandatory Attributes:**
-A [minimal set of attributes](https://docs.rs/axum-otel/latest/axum_otel/index.html#mandatory-attributes) are always recorded for basic trace utility (e.g., request ID, HTTP method, route).
+3.  **Basic Set + Specific Additions:**
+    ```rust
+    # use axum_otel::{AxumOtelSpanCreator, config, Level};
+    let span_creator = AxumOtelSpanCreator::new()
+        .select_basic_set()
+        .with_token(config::TOKEN_USER_AGENT_ORIGINAL) // Add User-Agent
+        .with_token(config::TOKEN_URL_QUERY);        // Add URL Query
+    ```
+
+4.  **Full Set - Specific Exclusions:**
+    ```rust
+    # use axum_otel::{AxumOtelSpanCreator, config, Level};
+    let span_creator = AxumOtelSpanCreator::new() // Starts with Full set by default
+        .without_token(config::TOKEN_CLIENT_ADDRESS)    // Remove client IP
+        .without_token(config::TOKEN_URL_FULL);         // Remove full URL
+    ```
+
+5.  **Minimal (Mandatory Only) + Specific Additions:**
+    ```rust
+    # use axum_otel::{AxumOtelSpanCreator, config, Level};
+    let span_creator = AxumOtelSpanCreator::new()
+        .select_none() // Start with only mandatory attributes
+        .with_token(config::TOKEN_USER_AGENT_ORIGINAL); // Add User-Agent
+    ```
 
 **Available Tokens:**
-For a complete list of available tokens and their descriptions, please refer to the [library documentation (Attribute Configuration section)](https://docs.rs/axum-otel/latest/axum_otel/index.html#attribute-configuration) and the `axum_otel::config` module.
+For a complete list of available tokens (like `config::TOKEN_HTTP_REQUEST_METHOD`, `config::TOKEN_RESPONSE_TIME_MS`, etc.) and their descriptions, please refer to the [library documentation's "Attribute Configuration" section](https_docs.rs/axum-otel/latest/axum_otel/index.html#attribute-configuration) and the `axum_otel::config` module.
 
 ## Examples
 

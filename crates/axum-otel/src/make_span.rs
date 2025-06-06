@@ -16,14 +16,19 @@ use tracing::{
 ///
 /// Original implementation from [tower-http](https://github.com/tower-rs/tower-http/blob/main/tower-http/src/trace/make_span.rs).
 ///
-/// This span creator automatically adds attributes to each span based on the configured
-/// [`AttributeSelection`] strategy. See the [crate-level documentation on Attribute Configuration](../index.html#attribute-configuration)
-/// for a detailed explanation of tokens, mandatory attributes, and selection strategies
-/// (`Level`, `Include`, `Exclude`).
+/// This span creator automatically adds attributes to each span. The set of attributes
+/// recorded can be customized using the fluent builder methods provided:
+/// - Start with a predefined set: [`Self::select_full_set()`] (default),
+///   [`Self::select_basic_set()`], or [`Self::select_none()`].
+/// - Incrementally add attributes: [`Self::with_token()`].
+/// - Incrementally remove attributes: [`Self::without_token()`].
 ///
-/// The selection strategy can be set using the [`.attribute_selection()`](AxumOtelSpanCreator::attribute_selection) method,
-/// or via the convenience method [`.attribute_verbosity()`](AxumOtelSpanCreator::attribute_verbosity) for predefined levels.
-/// The default is equivalent to `AttributeSelection::Level(AttributeVerbosity::Full)`.
+/// A simpler way to choose between `Full` and `Basic` predefined sets is via the
+/// [`.attribute_verbosity()`](Self::attribute_verbosity) method.
+///
+/// See the [crate-level documentation on Attribute Configuration](../index.html#attribute-configuration)
+/// for a detailed explanation of "tokens", mandatory attributes, and the available sets.
+/// The default configuration records all available attributes (`Full` verbosity).
 ///
 /// ### Basic Attributes (Always Included):
 /// - `otel.name`: Span name (e.g., "GET /users/:id")
@@ -53,27 +58,29 @@ use tracing::{
 ///
 /// ```rust
 /// use axum_otel::{AxumOtelSpanCreator, Level};
-use crate::{AttributeVerbosity, AttributeSelection}; // Import enums
+use crate::{AttributeVerbosity, config}; // Removed AttributeSelection, added config
+use std::collections::HashSet; // For selected_tokens
 
 /// use tower_http::trace::TraceLayer;
 ///
 /// let layer = TraceLayer::new_for_http()
 ///     .make_span_with(AxumOtelSpanCreator::new().level(Level::INFO));
 /// ```
-#[derive(Clone, Debug)] // AttributeSelection::Include/Exclude(Vec<String>) means not Copy
+#[derive(Clone, Debug)]
 pub struct AxumOtelSpanCreator {
     level: Level,
-    attribute_selection: AttributeSelection,
+    selected_tokens: HashSet<String>,
 }
 
 impl AxumOtelSpanCreator {
     /// Create a new `AxumOtelSpanCreator`.
     ///
-    /// By default, it uses `Level::TRACE` and `AttributeSelection::Level(AttributeVerbosity::Full)`.
+    /// By default, it uses `Level::TRACE` and selects all recognized attributes for recording
+    /// (equivalent to `AttributeVerbosity::Full`).
     pub fn new() -> Self {
         Self {
             level: Level::TRACE,
-            attribute_selection: AttributeSelection::default(),
+            selected_tokens: config::ALL_RECOGNIZED_TOKENS.iter().map(|s| s.to_string()).collect(),
         }
     }
 
@@ -89,45 +96,76 @@ impl AxumOtelSpanCreator {
 
     /// Sets the attribute recording strategy to a predefined verbosity level.
     ///
-    /// This is a convenience method that sets the `attribute_selection` to
-    /// [`AttributeSelection::Level(verbosity)`].
-    /// For more advanced control (e.g., include/exclude lists of tokens), use the
-    /// [`.attribute_selection()`](Self::attribute_selection) method.
+    /// This is a convenience method that internally calls [`.select_full_set()`](Self::select_full_set)
+    /// or [`.select_basic_set()`](Self::select_basic_set).
+    /// For more fine-grained control, use the `select_*`, `with_token`, and `without_token` methods directly.
     ///
-    /// The default behavior (if neither method is called) is equivalent to
-    /// `AttributeVerbosity::Full`.
+    /// The default behavior (if this method is not called) is equivalent to `AttributeVerbosity::Full`.
     pub fn attribute_verbosity(mut self, verbosity: AttributeVerbosity) -> Self {
-        self.attribute_selection = AttributeSelection::Level(verbosity);
+        match verbosity {
+            AttributeVerbosity::Full => self = self.select_full_set(),
+            AttributeVerbosity::Basic => self = self.select_basic_set(),
+        }
         self
     }
 
-    /// Sets the attribute selection strategy for attributes recorded by this component.
+    /// Configures the component to record the "basic" set of attributes.
     ///
-    /// This allows for fine-grained control over which attributes are recorded,
-    /// using either predefined levels (`AttributeSelection::Level`), or include/exclude lists
-    /// based on attribute tokens. See [`AttributeSelection`] for more details.
+    /// This set includes [mandatory attributes](crate::index.html#mandatory-attributes) plus a minimal
+    /// selection of common attributes defined by `config::BASIC_TOKENS`.
+    /// It clears any previously selected, added, or removed tokens.
+    pub fn select_basic_set(mut self) -> Self {
+        self.selected_tokens.clear();
+        self.selected_tokens.extend(config::MANDATORY_TOKENS.iter().map(|s| s.to_string()));
+        self.selected_tokens.extend(config::BASIC_TOKENS.iter().map(|s| s.to_string()));
+        self
+    }
+
+    /// Configures the component to record the "full" set of all recognized attributes.
     ///
-    /// The default is `AttributeSelection::Level(AttributeVerbosity::Full)`.
+    /// This set includes all attributes defined in `config::ALL_RECOGNIZED_TOKENS`.
+    /// This is the default behavior when an `AxumOtelSpanCreator` is created with `::new()`.
+    /// It clears any previously selected, added, or removed tokens.
+    pub fn select_full_set(mut self) -> Self {
+        self.selected_tokens.clear();
+        self.selected_tokens.extend(config::ALL_RECOGNIZED_TOKENS.iter().map(|s| s.to_string()));
+        self
+    }
+
+    /// Configures the component to record only the [mandatory minimal set of attributes](crate::index.html#mandatory-attributes).
     ///
-    /// # Example
-    /// ```rust
-    /// # use axum_otel::{AxumOtelSpanCreator, AttributeSelection, AttributeVerbosity, config, Level};
-    /// let creator_basic = AxumOtelSpanCreator::new()
-    ///     .attribute_selection(AttributeSelection::Level(AttributeVerbosity::Basic));
+    /// It clears any previously selected, added, or removed tokens before applying the mandatory set.
+    pub fn select_none(mut self) -> Self {
+        self.selected_tokens.clear();
+        self.selected_tokens.extend(config::MANDATORY_TOKENS.iter().map(|s| s.to_string()));
+        self
+    }
+
+    /// Adds an individual token to the current set of attributes to be recorded.
     ///
-    /// let creator_include = AxumOtelSpanCreator::new()
-    ///     .attribute_selection(AttributeSelection::Include(vec![
-    ///         config::TOKEN_HTTP_REQUEST_METHOD.to_string(),
-    ///         config::TOKEN_USER_AGENT_ORIGINAL.to_string(),
-    ///     ]));
+    /// The `token` must be one of the constants defined in the [`config`](crate::config) module
+    /// (e.g., `config::TOKEN_USER_AGENT_ORIGINAL`). Adding a token that is already part of the
+    /// selected set has no effect. Adding a mandatory token also has no practical effect as
+    /// mandatory tokens are always included if not using an empty `Include` list.
     ///
-    /// let creator_exclude = AxumOtelSpanCreator::new()
-    ///     .attribute_selection(AttributeSelection::Exclude(vec![
-    ///         config::TOKEN_URL_QUERY.to_string(),
-    ///     ]));
-    /// ```
-    pub fn attribute_selection(mut self, selection: AttributeSelection) -> Self {
-        self.attribute_selection = selection;
+    /// # Panics
+    /// Panics if the provided `token` is not found in `config::ALL_RECOGNIZED_TOKENS`.
+    pub fn with_token(mut self, token: &str) -> Self {
+        assert!(config::ALL_RECOGNIZED_TOKENS.contains(token), "Token '{}' is not a recognized attribute token.", token);
+        self.selected_tokens.insert(token.to_string());
+        self
+    }
+
+    /// Removes an individual token from the current set of attributes to be recorded.
+    ///
+    /// The `token` must be one of the constants defined in the [`config`](crate::config) module.
+    /// [Mandatory attributes](crate::index.html#mandatory-attributes) cannot be removed;
+    /// attempts to remove them using this method will be silently ignored.
+    /// Removing a token not currently in the selected set has no effect.
+    pub fn without_token(mut self, token: &str) -> Self {
+        if !config::MANDATORY_TOKENS.contains(token) {
+            self.selected_tokens.remove(token);
+        }
         self
     }
 }
@@ -183,127 +221,73 @@ impl<B> MakeSpan<B> for AxumOtelSpanCreator {
             |route| format!("{} {}", http_method_str, route),
         );
 
-        // Prepare include/exclude sets for efficient lookup if that variant is chosen
-        let user_include_set: Option<HashSet<String>> = match &self.attribute_selection {
-            AttributeSelection::Include(list) => Some(list.iter().cloned().collect()),
-            _ => None,
-        };
-        let user_exclude_set: Option<HashSet<String>> = match &self.attribute_selection {
-            AttributeSelection::Exclude(list) => Some(list.iter().cloned().collect()),
-            _ => None,
-        };
-
-        // Create the span with minimal initial fields (otel.name is set by tracing macro from span_name)
-        // otel.kind is set by the tracing library's OpenTelemetry layer typically.
-        // However, if we want to ensure it, we can add it if `should_record_token` says so for TOKEN_OTEL_KIND.
-        // For now, let's rely on the tracing macro for name and level, and record others.
+        // Create the span with minimal initial fields
         let span = tracing::span!(self.level, %span_name, otel.kind = ?SpanKind::Server);
 
         // Enter the span to record attributes on it.
         let _enter = span.enter();
 
-        // --- Record attributes based on selection strategy ---
+        // --- Record attributes based on selected tokens ---
 
-        // TOKEN_OTEL_NAME is handled by span_name in tracing::span!
-        // TOKEN_OTEL_KIND is handled by otel.kind = ?SpanKind::Server in tracing::span!
-
-        // http.request.method
-        if config::should_record_token(config::TOKEN_HTTP_REQUEST_METHOD, &self.attribute_selection, user_include_set.as_ref(), user_exclude_set.as_ref()) {
-            span.record(config::get_otel_key_for_token(config::TOKEN_HTTP_REQUEST_METHOD), request.method().as_str());
-        }
-
-        // http.route
-        if config::should_record_token(config::TOKEN_HTTP_ROUTE, &self.attribute_selection, user_include_set.as_ref(), user_exclude_set.as_ref()) {
-            if let Some(r) = route_str {
-                span.record(config::get_otel_key_for_token(config::TOKEN_HTTP_ROUTE), r);
+        // Helper closure to avoid repeating the same value extraction logic
+        // For &str values
+        let mut record_str_if_selected = |token: &str, value_fn: &dyn Fn() -> Option<&str>| {
+            if self.selected_tokens.contains(token) {
+                if let Some(value) = value_fn() {
+                    span.record(config::get_otel_key_for_token(token), value);
+                }
             }
-        }
+        };
+        // For Debug values
+        let mut record_debug_if_selected = |token: &str, value_fn: &dyn Fn() -> Option<Box<dyn std::fmt::Debug + Send + Sync + 'static>>| {
+            if self.selected_tokens.contains(token) {
+                if let Some(value) = value_fn() {
+                    span.record(config::get_otel_key_for_token(token), field::debug(value));
+                }
+            }
+        };
+         // For u64 values
+        let mut record_u64_if_selected = |token: &str, value_fn: &dyn Fn() -> Option<u64>| {
+            if self.selected_tokens.contains(token) {
+                if let Some(value) = value_fn() {
+                    span.record(config::get_otel_key_for_token(token), value);
+                }
+            }
+        };
 
-        // url.path
-        if config::should_record_token(config::TOKEN_URL_PATH, &self.attribute_selection, user_include_set.as_ref(), user_exclude_set.as_ref()) {
-            span.record(config::get_otel_key_for_token(config::TOKEN_URL_PATH), request.uri().path());
-        }
+        record_str_if_selected(config::TOKEN_HTTP_REQUEST_METHOD, &|| Some(request.method().as_str()));
+        record_str_if_selected(config::TOKEN_HTTP_ROUTE, &|| route_str);
+        record_str_if_selected(config::TOKEN_URL_PATH, &|| Some(request.uri().path()));
+        record_str_if_selected(config::TOKEN_REQUEST_ID, &|| Some(get_request_id(request.headers())));
 
-        // request_id
-        if config::should_record_token(config::TOKEN_REQUEST_ID, &self.attribute_selection, user_include_set.as_ref(), user_exclude_set.as_ref()) {
-            span.record(config::get_otel_key_for_token(config::TOKEN_REQUEST_ID), get_request_id(request.headers()));
+        if self.selected_tokens.contains(config::TOKEN_HTTP_RESPONSE_STATUS_CODE) {
+            span.record(config::get_otel_key_for_token(config::TOKEN_HTTP_RESPONSE_STATUS_CODE), Empty);
         }
-
-        // trace_id (This is usually handled by the OpenTelemetry layer, but we record it for logging)
-        // The set_otel_parent function records this. We ensure it's only called if the token is allowed.
-        // For now, set_otel_parent is called unconditionally at the end.
-        // If TOKEN_TRACE_ID needs to be conditional for recording, set_otel_parent call needs modification/wrapping.
-        // Let's assume set_otel_parent internally checks or TOKEN_TRACE_ID is mandatory for its purpose.
-        // The current logic in set_otel_parent records "trace_id" unconditionally.
-
-        // http.response.status_code & otel.status_code are placeholders, recorded by OnResponse/OnFailure
-        // We can record them as Empty if the tokens are active.
-        if config::should_record_token(config::TOKEN_HTTP_RESPONSE_STATUS_CODE, &self.attribute_selection, user_include_set.as_ref(), user_exclude_set.as_ref()) {
-             span.record(config::get_otel_key_for_token(config::TOKEN_HTTP_RESPONSE_STATUS_CODE), Empty);
-        }
-        if config::should_record_token(config::TOKEN_OTEL_STATUS_CODE, &self.attribute_selection, user_include_set.as_ref(), user_exclude_set.as_ref()) {
+        if self.selected_tokens.contains(config::TOKEN_OTEL_STATUS_CODE) {
             span.record(config::get_otel_key_for_token(config::TOKEN_OTEL_STATUS_CODE), Empty);
         }
 
-
-        // --- Full Attributes (conditionally recorded) ---
-        let client_ip_val = request.extensions().get::<ConnectInfo<SocketAddr>>().map(|ConnectInfo(ip)| ip);
-        if config::should_record_token(config::TOKEN_CLIENT_ADDRESS, &self.attribute_selection, user_include_set.as_ref(), user_exclude_set.as_ref()) {
-            if let Some(ip) = client_ip_val {
-                 span.record(config::get_otel_key_for_token(config::TOKEN_CLIENT_ADDRESS), field::debug(ip));
-            }
-        }
-
-        if config::should_record_token(config::TOKEN_NETWORK_PROTOCOL_VERSION, &self.attribute_selection, user_include_set.as_ref(), user_exclude_set.as_ref()) {
-            span.record(config::get_otel_key_for_token(config::TOKEN_NETWORK_PROTOCOL_VERSION), field::debug(request.version()));
-        }
+        record_debug_if_selected(config::TOKEN_CLIENT_ADDRESS, &|| request.extensions().get::<ConnectInfo<SocketAddr>>().map(|ConnectInfo(ip)| Box::new(*ip) as Box<dyn std::fmt::Debug + Send + Sync + 'static>));
+        record_debug_if_selected(config::TOKEN_NETWORK_PROTOCOL_VERSION, &|| Some(Box::new(request.version()) as Box<dyn std::fmt::Debug + Send + Sync + 'static>));
 
         let host_val = request.headers().get(http::header::HOST).and_then(|h| h.to_str().ok());
-        if config::should_record_token(config::TOKEN_SERVER_ADDRESS, &self.attribute_selection, user_include_set.as_ref(), user_exclude_set.as_ref()) {
-            if let Some(h) = host_val {
-                span.record(config::get_otel_key_for_token(config::TOKEN_SERVER_ADDRESS), h);
-            }
-        }
+        record_str_if_selected(config::TOKEN_SERVER_ADDRESS, &|| host_val);
 
         let scheme_str_val = request.uri().scheme_str();
-        if config::should_record_token(config::TOKEN_URL_SCHEME, &self.attribute_selection, user_include_set.as_ref(), user_exclude_set.as_ref()) {
-            if let Some(s) = scheme_str_val {
-                span.record(config::get_otel_key_for_token(config::TOKEN_URL_SCHEME), s);
-            }
-        }
+        record_str_if_selected(config::TOKEN_URL_SCHEME, &|| scheme_str_val);
+        record_str_if_selected(config::TOKEN_NETWORK_PROTOCOL_NAME, &|| Some(scheme_str_val.unwrap_or("http")));
+        record_str_if_selected(config::TOKEN_URL_QUERY, &|| request.uri().query());
 
-        if config::should_record_token(config::TOKEN_NETWORK_PROTOCOL_NAME, &self.attribute_selection, user_include_set.as_ref(), user_exclude_set.as_ref()) {
-            span.record(config::get_otel_key_for_token(config::TOKEN_NETWORK_PROTOCOL_NAME), scheme_str_val.unwrap_or("http"));
-        }
+        record_str_if_selected(config::TOKEN_USER_AGENT_ORIGINAL, &|| request.headers().get(http::header::USER_AGENT).and_then(|ua| ua.to_str().ok()));
+        record_u64_if_selected(config::TOKEN_SERVER_PORT, &|| request.uri().port_u16().map(u64::from));
 
-        if config::should_record_token(config::TOKEN_URL_QUERY, &self.attribute_selection, user_include_set.as_ref(), user_exclude_set.as_ref()) {
-            if let Some(q) = request.uri().query() {
-                span.record(config::get_otel_key_for_token(config::TOKEN_URL_QUERY), q);
-            }
-        }
-
-        let user_agent_val = request.headers().get(http::header::USER_AGENT).and_then(|ua| ua.to_str().ok());
-        if config::should_record_token(config::TOKEN_USER_AGENT_ORIGINAL, &self.attribute_selection, user_include_set.as_ref(), user_exclude_set.as_ref()) {
-            if let Some(ua) = user_agent_val {
-                span.record(config::get_otel_key_for_token(config::TOKEN_USER_AGENT_ORIGINAL), ua);
-            }
-        }
-
-        if config::should_record_token(config::TOKEN_SERVER_PORT, &self.attribute_selection, user_include_set.as_ref(), user_exclude_set.as_ref()) {
-            if let Some(port) = request.uri().port_u16() {
-                span.record(config::get_otel_key_for_token(config::TOKEN_SERVER_PORT), port);
-            }
-        }
-
-        if config::should_record_token(config::TOKEN_URL_FULL, &self.attribute_selection, user_include_set.as_ref(), user_exclude_set.as_ref()) {
-            if let (Some(scheme), Some(host)) = (scheme_str_val, host_val) { // host_val already extracted
+        if self.selected_tokens.contains(config::TOKEN_URL_FULL) {
+            if let (Some(scheme), Some(host)) = (scheme_str_val, host_val) {
                 let path_and_query = request.uri().path_and_query().map_or("", |pq| pq.as_str());
                 span.record(config::get_otel_key_for_token(config::TOKEN_URL_FULL), format!("{}://{}{}", scheme, host, path_and_query).as_str());
             }
         }
 
-        // Special handling for TOKEN_TRACE_ID if set_otel_parent needs to be conditional
-        // For now, assume trace_id from set_otel_parent is always desired if tracing is active.
         set_otel_parent(request.headers(), &span);
         span
     }
@@ -602,5 +586,108 @@ mod tests {
         let mut mandatory_to_check = HashSet::new();
         mandatory_to_check.insert(TOKEN_HTTP_REQUEST_METHOD);
         assert_attributes_presence(&attributes, &mandatory_to_check, true, "Exclude Mandatory - Mandatory token should still be present");
+    }
+
+    // --- Tests for selected_tokens builder methods ---
+    fn assert_sets_equal(selected: &HashSet<String>, expected_phf_set: &phf::Set<&'static str>, context: &str) {
+        let expected_hs: HashSet<String> = expected_phf_set.iter().map(|s| s.to_string()).collect();
+        assert_eq!(*selected, expected_hs, "Context: {}", context);
+    }
+
+    fn assert_sets_equal_with_extra(selected: &HashSet<String>, phf_set1: &phf::Set<&'static str>, phf_set2: Option<&phf::Set<&'static str>>, extras: &[&str], context: &str) {
+        let mut expected_hs: HashSet<String> = phf_set1.iter().map(|s| s.to_string()).collect();
+        if let Some(set2) = phf_set2 {
+            expected_hs.extend(set2.iter().map(|s| s.to_string()));
+        }
+        for extra in extras {
+            expected_hs.insert(extra.to_string());
+        }
+        assert_eq!(*selected, expected_hs, "Context: {}", context);
+    }
+
+    #[test]
+    fn span_creator_default_initialization() {
+        let creator = AxumOtelSpanCreator::new();
+        assert_sets_equal(&creator.selected_tokens, &config::ALL_RECOGNIZED_TOKENS, "Default init should be Full set");
+    }
+
+    #[test]
+    fn span_creator_select_basic_set() {
+        let creator = AxumOtelSpanCreator::new().select_basic_set();
+        let mut expected = config::MANDATORY_TOKENS.iter().map(|s|s.to_string()).collect::<HashSet<String>>();
+        expected.extend(config::BASIC_TOKENS.iter().map(|s|s.to_string()));
+        assert_eq!(creator.selected_tokens, expected, "select_basic_set check");
+    }
+
+    #[test]
+    fn span_creator_select_full_set() {
+        let creator = AxumOtelSpanCreator::new().select_basic_set().select_full_set(); // Start different, then switch
+        assert_sets_equal(&creator.selected_tokens, &config::ALL_RECOGNIZED_TOKENS, "select_full_set check");
+    }
+
+    #[test]
+    fn span_creator_select_none() {
+        let creator = AxumOtelSpanCreator::new().select_none();
+        assert_sets_equal(&creator.selected_tokens, &config::MANDATORY_TOKENS, "select_none should only have Mandatory tokens");
+    }
+
+    #[test]
+    fn span_creator_with_token() {
+        let creator = AxumOtelSpanCreator::new()
+            .select_none()
+            .with_token(config::TOKEN_USER_AGENT_ORIGINAL)
+            .with_token(config::TOKEN_HTTP_REQUEST_METHOD); // Mandatory, should not change outcome vs select_none
+
+        let mut expected = config::MANDATORY_TOKENS.iter().map(|s|s.to_string()).collect::<HashSet<String>>();
+        expected.insert(config::TOKEN_USER_AGENT_ORIGINAL.to_string());
+
+        assert_eq!(creator.selected_tokens, expected, "with_token check");
+    }
+
+    #[test]
+    #[should_panic(expected = "Token 'unknown_token' is not a recognized attribute token.")]
+    fn span_creator_with_unknown_token_panics() {
+        AxumOtelSpanCreator::new().with_token("unknown_token");
+    }
+
+    #[test]
+    fn span_creator_without_token() {
+        let creator = AxumOtelSpanCreator::new() // Starts with Full set
+            .without_token(config::TOKEN_USER_AGENT_ORIGINAL)
+            .without_token(config::TOKEN_HTTP_REQUEST_METHOD); // Attempt to remove mandatory
+
+        assert!(!creator.selected_tokens.contains(config::TOKEN_USER_AGENT_ORIGINAL), "TOKEN_USER_AGENT_ORIGINAL should be removed");
+        assert!(creator.selected_tokens.contains(config::TOKEN_HTTP_REQUEST_METHOD), "Mandatory TOKEN_HTTP_REQUEST_METHOD should still be present");
+
+        // Check if other Full set tokens (not mandatory, not TOKEN_USER_AGENT_ORIGINAL) are still there
+        assert!(creator.selected_tokens.contains(config::TOKEN_CLIENT_ADDRESS), "Other Full set token TOKEN_CLIENT_ADDRESS should be present");
+    }
+
+    #[test]
+    fn span_creator_attribute_verbosity_method() {
+        let creator_basic = AxumOtelSpanCreator::new().attribute_verbosity(AttributeVerbosity::Basic);
+        let mut expected_basic = config::MANDATORY_TOKENS.iter().map(|s|s.to_string()).collect::<HashSet<String>>();
+        expected_basic.extend(config::BASIC_TOKENS.iter().map(|s|s.to_string()));
+        assert_eq!(creator_basic.selected_tokens, expected_basic, "attribute_verbosity(Basic) check");
+
+        let creator_full = AxumOtelSpanCreator::new().attribute_verbosity(AttributeVerbosity::Full);
+        assert_sets_equal(&creator_full.selected_tokens, &config::ALL_RECOGNIZED_TOKENS, "attribute_verbosity(Full) check");
+    }
+
+    #[test]
+    fn span_creator_chaining_complex() {
+        let creator = AxumOtelSpanCreator::new()
+            .select_basic_set() // Starts with Basic + Mandatory
+            .with_token(config::TOKEN_URL_FULL) // Add one from Full set
+            .without_token(config::TOKEN_URL_PATH) // Remove one from Basic (but it's also Mandatory)
+            .with_token(config::TOKEN_SERVER_PORT); // Add another from Full set
+
+        let mut expected = config::MANDATORY_TOKENS.iter().map(|s|s.to_string()).collect::<HashSet<String>>();
+        expected.extend(config::BASIC_TOKENS.iter().map(|s|s.to_string()));
+        expected.insert(config::TOKEN_URL_FULL.to_string());
+        expected.insert(config::TOKEN_SERVER_PORT.to_string());
+        // TOKEN_URL_PATH is mandatory, so without_token should not have removed it.
+
+        assert_eq!(creator.selected_tokens, expected, "Complex chaining check");
     }
 }

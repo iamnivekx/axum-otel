@@ -30,7 +30,8 @@
 //!
 //! The primary way to use `axum-otel` is by creating a `tower_http::trace::TraceLayer`
 //! and configuring its components: [`AxumOtelSpanCreator`], [`AxumOtelOnResponse`], and
-//! [`AxumOtelOnFailure`]. Attribute recording can be customized using [`AttributeSelection`].
+//! [`AxumOtelOnFailure`]. Attribute recording is customized using the fluent builder API
+//! on `AxumOtelSpanCreator` and `AxumOtelOnResponse`.
 //!
 //! ```rust
 //! use axum::{
@@ -39,8 +40,8 @@
 //! };
 //! use axum_otel::{
 //!     AxumOtelOnFailure, AxumOtelOnResponse, AxumOtelSpanCreator, Level,
-//!     AttributeSelection, AttributeVerbosity, // For attribute control
-//!     config // To reference token constants for clarity, if desired
+//!     AttributeVerbosity, // For the simple verbosity preset
+//!     config // To reference token constants for fine-grained control
 //! };
 //! use tower_http::trace::TraceLayer;
 //!
@@ -56,44 +57,76 @@
 //!             .make_span_with(
 //!                 AxumOtelSpanCreator::new()
 //!                     .level(Level::INFO)
-//!                     // Example: Using a predefined Basic set of attributes.
-//!                     // Default is AttributeSelection::Level(AttributeVerbosity::Full).
-//!                     .attribute_selection(AttributeSelection::Level(AttributeVerbosity::Basic))
-//!                     // For more examples (Include/Exclude lists), see "Attribute Configuration" below.
+//!                     // Example: Start with Basic set and add User-Agent.
+//!                     .select_basic_set()
+//!                     .with_token(config::TOKEN_USER_AGENT_ORIGINAL)
 //!             )
 //!             .on_response(
 //!                 AxumOtelOnResponse::new()
 //!                     .level(Level::INFO)
-//!                     .attribute_selection(AttributeSelection::Level(AttributeVerbosity::Basic))
+//!                     // Example: Start with Basic set and add response time.
+//!                     .select_basic_set()
+//!                     .with_token(config::TOKEN_RESPONSE_TIME_MS)
 //!             )
-//!             .on_failure(AxumOtelOnFailure::new()), // OnFailure typically records minimal error info
+//!             .on_failure(AxumOtelOnFailure::new()), // OnFailure records minimal error info by default
 //!     );
 //! ```
 //!
 //! ## Attribute Configuration
 //!
-//! `axum-otel` provides flexible control over which telemetry attributes are recorded on spans.
-//! This is managed by the [`AttributeSelection`] enum, which can be configured on both
-//! [`AxumOtelSpanCreator`] and [`AxumOtelOnResponse`].
+//! `axum-otel` offers fine-grained control over telemetry attributes recorded on spans,
+//! managed via fluent builder methods on [`AxumOtelSpanCreator`] and [`AxumOtelOnResponse`].
+//! This allows precise tailoring of telemetry data, which can be crucial for managing
+//! data volume, cost, and signal-to-noise ratio in telemetry backends.
 //!
-//! The default configuration is `AttributeSelection::Level(AttributeVerbosity::Full)`, which
-//! records all available attributes.
+//! The default configuration for both components is to record all available attributes
+//! (equivalent to calling `.select_full_set()`).
 //!
-//! ### Strategies:
+//! ### Configuration Methods:
 //!
-//! 1.  **Predefined Levels (`AttributeSelection::Level`)**:
-//!     *   [`AttributeVerbosity::Full`]: Records all recognized attributes (see full token list below).
-//!     *   [`AttributeVerbosity::Basic`]: Records a smaller, essential set of attributes.
-//! 2.  **Include Lists (`AttributeSelection::Include(Vec<String>)`)**:
-//!     Records only attributes corresponding to the "tokens" in the provided list, plus a
-//!     [mandatory minimal set](#mandatory-attributes).
-//!     Example: `AttributeSelection::Include(vec![config::TOKEN_HTTP_REQUEST_METHOD.to_string(), config::TOKEN_USER_AGENT_ORIGINAL.to_string()])`
-//! 3.  **Exclude Lists (`AttributeSelection::Exclude(Vec<String>)`)**:
-//!     Records all attributes from the `Full` set *except* those corresponding to the "tokens"
-//!     in the provided list. Mandatory attributes are always included.
-//!     Example: `AttributeSelection::Exclude(vec![config::TOKEN_USER_AGENT_ORIGINAL.to_string()])`
+//! 1.  **Start with a Predefined Set:**
+//!     *   `.select_full_set()`: Selects all recognized attributes for recording. This is the default.
+//!     *   `.select_basic_set()`: Selects a predefined "basic" set of attributes, including
+//!         [mandatory attributes](#mandatory-attributes) and common essential ones.
+//!     *   `.select_none()`: Selects only the [mandatory minimal set](#mandatory-attributes).
 //!
-//! Using `Basic`, `Include`, or `Exclude` can help reduce telemetry data volume and cost.
+//! 2.  **Incrementally Add or Remove Attributes (by Token):**
+//!     *   `.with_token(token: &str) -> Self`: Adds an attribute corresponding to the given token.
+//!         Panics if the token is not recognized (see [Available Attribute Tokens](#available-attribute-tokens)).
+//!     *   `.without_token(token: &str) -> Self`: Removes an attribute corresponding to the given token.
+//!         Mandatory attributes cannot be removed; attempts to do so are silently ignored.
+//!
+//! 3.  **Simple Presets (`attribute_verbosity`)**:
+//!     *   `.attribute_verbosity(AttributeVerbosity::Full)`: Convenience for `.select_full_set()`.
+//!     *   `.attribute_verbosity(AttributeVerbosity::Basic)`: Convenience for `.select_basic_set()`.
+//!
+//! **Example Scenarios:**
+//!
+//! ```rust
+//! # use axum_otel::{AxumOtelSpanCreator, Level, AttributeVerbosity, config};
+//! // Scenario 1: Start with Basic, add specific tokens
+//! let creator1 = AxumOtelSpanCreator::new()
+//!     .select_basic_set()
+//!     .with_token(config::TOKEN_USER_AGENT_ORIGINAL)
+//!     .with_token(config::TOKEN_URL_QUERY);
+//!
+//! // Scenario 2: Start with Full (default), remove a few noisy tokens
+//! let creator2 = AxumOtelSpanCreator::new() // Defaults to Full set
+//!     .without_token(config::TOKEN_CLIENT_ADDRESS)
+//!     .without_token(config::TOKEN_URL_FULL);
+//!
+//! // Scenario 3: Start with None (only mandatory), add very specific tokens
+//! let creator3 = AxumOtelSpanCreator::new()
+//!     .select_none()
+//!     .with_token(config::TOKEN_HTTP_REQUEST_METHOD) // Already mandatory
+//!     .with_token(config::TOKEN_USER_AGENT_ORIGINAL);
+//!
+//! // Scenario 4: Simplest way for Basic set
+//! let creator4 = AxumOtelSpanCreator::new().attribute_verbosity(AttributeVerbosity::Basic);
+//! ```
+//!
+//! Using these methods helps optimize the telemetry data sent to backends, reducing cost and
+//! improving the utility of collected traces.
 //!
 //! <span id="mandatory-attributes"></span>
 //! ### Mandatory Attributes
@@ -182,31 +215,33 @@ pub use tracing::Level;
 /// high-traffic applications.
 ///
 /// The specific attributes included in `Basic` vs `Full` are detailed in the documentation
-/// for [`AxumOtelSpanCreator`] and [`AxumOtelOnResponse`].
+/// for [`AxumOtelSpanCreator`] and [`AxumOtelOnResponse`], and correspond to the token sets
+/// `config::BASIC_TOKENS` and `config::ALL_RECOGNIZED_TOKENS` respectively (always including
+/// `config::MANDATORY_TOKENS`).
+///
+/// This enum is used with the `.attribute_verbosity()` convenience method on span configuration
+/// components like [`AxumOtelSpanCreator`] and [`AxumOtelOnResponse`], which internally call
+/// methods like `.select_full_set()` or `.select_basic_set()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttributeVerbosity {
-    /// Records all available attributes, providing the most detailed telemetry.
-    /// This is generally the default.
+    /// Corresponds to the `.select_full_set()` configuration.
+    /// Records all available attributes recognized by this crate.
     Full,
-    /// Records a reduced set of essential attributes. For example, for HTTP spans,
-    /// this might include method, route, status code, and request ID, but exclude
-    /// detailed headers like User-Agent or verbose URL components like query parameters.
+    /// Corresponds to the `.select_basic_set()` configuration.
+    /// Records a reduced set of essential attributes.
     Basic,
 }
 
-/// Defines how attributes are selected for recording on spans.
-///
-/// This enum provides more granular control over attribute recording beyond the
-/// simple `Full` or `Basic` levels offered by [`AttributeVerbosity`].
+// The `AttributeSelection` enum was part of a previous API for attribute configuration.
+// The current recommended way to configure attributes is via the fluent builder methods
+// on `AxumOtelSpanCreator` and `AxumOtelOnResponse` (e.g., `select_basic_set()`, `with_token()`).
+// This enum is kept for potential internal use or future evolution but is not directly
+// used in the primary configuration API anymore.
 #[derive(Debug, Clone)]
-pub enum AttributeSelection {
-    /// Select attributes based on a predefined verbosity level.
+#[doc(hidden)] // Hidden from public docs as it's not for direct user configuration now.
+enum AttributeSelection {
     Level(AttributeVerbosity),
-    /// Include only the attributes whose keys are specified in the list.
-    /// All other attributes will be excluded.
     Include(Vec<String>),
-    /// Exclude all attributes whose keys are specified in the list.
-    /// All other attributes will be included (respecting `AttributeVerbosity::Full` as a baseline).
     Exclude(Vec<String>),
 }
 
